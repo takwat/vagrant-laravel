@@ -1,0 +1,1 @@
+vagrant上でnginx + php-fpm / MySQL / Node.js環境を作る
