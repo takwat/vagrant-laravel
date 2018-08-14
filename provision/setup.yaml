@@ -1,0 +1,220 @@
+- name: provisioning
+  hosts: all
+  tasks:
+    - name: yum update
+      yum: 
+        name=*
+        state=present
+      become: true
+    - name: Install epel
+      yum: 
+        name=epel-release
+        state=present
+      become: true
+    - name: Install Development Tools
+      yum:
+        name: "@Development Tools"
+        state: present
+      become: true
+    - name: Install wget
+      yum:
+        name: "wget"
+        state: present
+      become: true
+
+    - name: Add nginx repository
+      yum_repository:
+        name: nginx
+        description: nginx repo
+        baseurl: "http://nginx.org/packages/centos/7/$basearch/"
+        gpgcheck: no
+        enabled: yes
+      become: true
+    - name: Install nginx
+      yum:
+        name: nginx
+        state: present
+      become: true
+
+    - name: Add MySQL repository
+      yum:
+        name: https://dev.mysql.com/get/mysql80-community-release-el7-1.noarch.rpm
+        state: present
+      become: true
+
+    - name: Install MySQL
+      yum: pkg={{ item }} state=present
+      with_items:
+        - mysql-community-server
+        - mysql-community-client
+        - mysql-community-libs
+        - mysql-community-libs-compat
+        - mysql-community-devel
+        - MySQL-python
+      become: true
+
+    - name: Deploy global my.cnf
+      template:
+        src: ./files/my.cnf
+        dest: /etc/my.cnf
+        owner: root
+        group: root
+        mode: 0644
+      become: true
+
+    - name: Start the MySQL service
+      service:
+        name: mysqld
+        state: started
+        enabled: true
+      become: true
+
+    - name: check .my.cnf exists
+      stat:
+        path: /root/.my.cnf
+      register: mycnf_file
+      become: true
+
+    - name: Get temporary password
+      shell: cat /var/log/mysqld.log | grep "temporary password" | awk '{print $13}'
+      register: mysql_default_password
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Deploy temporary .my.cnf
+      template:
+        src: ./files/_my.cnf.j2
+        dest: /root/.my.cnf
+        owner: root
+        group: root
+        mode: 0644
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Change MySQL password validation to the easy way
+      shell: |
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.check_user_name=OFF;"
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.length=4;"
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.mixed_case_count=0;"
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.number_count=0;"
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.special_char_count=0;"
+        mysql --defaults-extra-file=/root/.my.cnf -e "SET GLOBAL validate_password.policy=LOW;"
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Change MySQL root user password
+      shell: |
+        mysql --defaults-extra-file=/root/.my.cnf -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root';"
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Deploy changed .my.cnf
+      template:
+        src: ./files/_my.cnf
+        dest: /root/.my.cnf
+        owner: root
+        group: root
+        mode: 0644
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Create MySQL user
+      mysql_user:
+        name: vagrant
+        password: vagrant
+        priv: '*.*:ALL,GRANT'
+        state: present
+      when: not mycnf_file.stat.exists
+      become: true
+
+    - name: Add remi repository
+      yum:
+        name: "https://rpms.remirepo.net/enterprise/remi-release-7.rpm"
+        state: present
+      become: true
+
+    - name: Install redis
+      yum: pkg=redis state=present
+      become: true
+
+    - name: Install PHP
+      yum: pkg={{ item }} state=present enablerepo=remi,remi-php72
+      with_items:
+        - redis
+        - php
+        - php-common
+        - php-cli
+        - php-fpm
+        - php-json
+        - php-intl
+        - php-mbstring
+        - php-pdo
+        - php-mysqlnd
+        - php-pecl-igbinary
+        - php-pecl-redis
+      become: true
+
+    - name: Configure nginx
+      template:
+        src: ./files/default.conf
+        dest: /etc/nginx/conf.d/default.conf
+        owner: root
+        group: root
+        mode: 0644
+      become: true
+
+    - name: Configure php-fpm
+      template:
+        src: ./files/www.conf
+        dest: /etc/php-fpm.d/www.conf
+        owner: root
+        group: root
+        mode: 0644
+      become: true
+
+    - name: Start php-fpm
+      service: name=php-fpm enabled=Yes state=started
+      become: true
+
+    - name: Start nginx
+      service: name=nginx enabled=Yes state=started
+      become: true
+
+    - name: Configure /vagrant mounted hook
+      template:
+        src: ./files/80-vagrant-mounted.rules
+        dest: /etc/udev/rules.d/80-vagrant-mounted.rules
+        owner: root
+        group: root
+        mode: 0644
+      become: true
+
+    - name: Configure /vagrant mounted hook script
+      template:
+        src: ./files/.udev-vagrant-mounted.sh
+        dest: /root/.udev-vagrant-mounted.sh
+        owner: root
+        group: root
+        mode: 0700
+      become: true
+
+    - name: Create local binary directory
+      file: path=/home/vagrant/.local/bin state=directory owner=vagrant group=vagrant mode=0755
+
+    - name: Install composer
+      shell: |
+        php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+        php -r "if (hash_file('SHA384', 'composer-setup.php') === '544e09ee996cdf60ece3804abc52599c22b1f40f4323403c44d44fdfdd586475ca9813a858088ffbc1f233e9b180f061') { echo 'Installer verified'; } else { echo 'Installer corrupt'; unlink('composer-setup.php'); } echo PHP_EOL;"
+        php composer-setup.php
+        php -r "unlink('composer-setup.php');"
+        mv composer.phar composer
+      args:
+        chdir: /home/vagrant/.local/bin
+
+    - name: Install nvm
+      shell: curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.11/install.sh | bash
+
+    - name: Install Node.js
+      shell: |
+        source ~/.bashrc
+        nvm install v8
