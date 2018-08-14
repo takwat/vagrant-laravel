@@ -145,11 +145,13 @@
         - php-common
         - php-cli
         - php-fpm
+        - php-xml
         - php-json
         - php-intl
         - php-mbstring
         - php-pdo
         - php-mysqlnd
+        - php-pecl-zip
         - php-pecl-igbinary
         - php-pecl-redis
       become: true
